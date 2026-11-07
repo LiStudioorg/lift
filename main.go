@@ -8,14 +8,23 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path"
+	"strings"
 	"syscall"
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "docker" {
-		dockerCLI(os.Args[2:])
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "docker":
+			dockerCLI(os.Args[2:])
+			return
+		case "s3":
+			s3CLI(os.Args[2:])
+			return
+		case "sftp":
+			sftpCLI(os.Args[2:])
+			return
+		}
 	}
 
 	output := flag.String("o", "", "输出文件名；批量下载时作为输出目录")
@@ -23,11 +32,52 @@ func main() {
 	listPath := flag.String("f", "", "包含多个 URL 的列表文件（每行一个，忽略空行和 # 注释）")
 	expectedSHA256 := flag.String("sha256", "", "下载完成后校验文件的 SHA256（仅支持单个下载任务）")
 	proxy := flag.String("proxy", "", "代理地址（支持 http:// 和 socks5://）")
+
+	s3Endpoint := flag.String("s3-endpoint", "", "S3 Endpoint（含协议，如 https://s3.amazonaws.com；默认 AWS）")
+	s3AccessKey := flag.String("s3-ak", "", "S3 Access Key")
+	s3SecretKey := flag.String("s3-sk", "", "S3 Secret Key")
+	s3SessionToken := flag.String("s3-token", "", "S3 Session Token（可选）")
+	s3Region := flag.String("s3-region", "", "S3 Region（可选）")
+
+	sftpUser := flag.String("sftp-user", "", "SFTP 用户名（URL 中未提供时使用）")
+	sftpPassword := flag.String("sftp-pass", "", "SFTP 密码（URL 中未提供时使用）")
+	sftpKey := flag.String("sftp-key", "", "SFTP 私钥路径")
+	sftpKeyPassphrase := flag.String("sftp-key-pass", "", "SFTP 私钥密码")
+	sftpKnownHosts := flag.String("sftp-known-hosts", "", "SFTP known_hosts 路径")
+	sftpInsecure := flag.Bool("sftp-insecure", false, "跳过 SFTP 主机密钥校验（不推荐）")
+
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "用法: %s [选项] <URL> [URL...]\n", os.Args[0])
+		out := flag.CommandLine.Output()
+		fmt.Fprintf(out, "用法: %s [选项] <URL> [URL...]\n", os.Args[0])
+		fmt.Fprintf(out, "      %s docker pull <image> -o <output.tar>\n", os.Args[0])
+		fmt.Fprintf(out, "      %s s3 pull <key> --bucket <bucket> --endpoint <url> --ak <key> --sk <secret> -o <output>\n", os.Args[0])
+		fmt.Fprintf(out, "      %s sftp pull <path> --host <host[:port]> --user <user> (--pass <password> | --key <private_key>) -o <output>\n", os.Args[0])
+		fmt.Fprintln(out, "支持协议: http(s)://、s3://bucket/key、sftp://user:pass@host:port/path")
 		flag.PrintDefaults()
 	}
-	flag.Parse()
+
+	// 允许选项出现在 URL 前后，兼容子命令风格的参数顺序。
+	if err := flag.CommandLine.Parse(reorderArgs(os.Args[1:])); err != nil {
+		os.Exit(2)
+	}
+
+	appSourceOptions = sourceOptions{
+		s3: s3Options{
+			Endpoint:     *s3Endpoint,
+			AccessKey:    *s3AccessKey,
+			SecretKey:    *s3SecretKey,
+			SessionToken: *s3SessionToken,
+			Region:       *s3Region,
+		},
+		sftp: sftpOptions{
+			User:           *sftpUser,
+			Password:       *sftpPassword,
+			KeyPath:        *sftpKey,
+			KeyPassphrase:  *sftpKeyPassphrase,
+			KnownHostsPath: *sftpKnownHosts,
+			Insecure:       *sftpInsecure,
+		},
+	}
 
 	urls, err := collectURLs(flag.Args(), *listPath)
 	if err != nil {
@@ -99,25 +149,48 @@ func main() {
 	}
 }
 
-// downloadOne 执行单个下载任务，并按需进行 SHA256 校验。
+// downloadOne 创建任务对应的数据源并执行单个下载。
 func downloadOne(ctx context.Context, task downloadTask, expectedHash string) error {
-	if err := Download(ctx, NewHTTPSource(task.URL), task.OutputPath); err != nil {
+	src, err := newSource(task.URL)
+	if err != nil {
+		return err
+	}
+	defer closeSource(src)
+
+	return downloadSource(ctx, src, task.OutputPath, expectedHash)
+}
+
+// downloadSource 执行单个数据源下载，并按需进行 SHA256 校验。
+func downloadSource(ctx context.Context, src Source, outputPath, expectedHash string) error {
+	if err := Download(ctx, src, outputPath); err != nil {
 		return err
 	}
 
 	if expectedHash != "" {
-		actual, err := VerifySHA256(task.OutputPath, expectedHash)
+		actual, err := VerifySHA256(outputPath, expectedHash)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("SHA256 校验通过 (%s): %s\n", task.OutputPath, actual)
+		fmt.Printf("SHA256 校验通过 (%s): %s\n", outputPath, actual)
 	}
 
 	// 仅在完整下载且校验通过后删除状态文件。
-	if err := os.Remove(StatePath(task.OutputPath)); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(StatePath(outputPath)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("删除状态文件失败: %w", err)
 	}
 	return nil
+}
+
+// runSourceCLI 为子命令创建信号上下文并执行下载。
+func runSourceCLI(src Source, outputPath string) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	err := downloadSource(ctx, src, outputPath, "")
+	closeSource(src)
+	if err != nil {
+		exitDownloadError(err)
+	}
 }
 
 // exitDownloadError 根据错误类型输出信息并退出。
@@ -133,7 +206,104 @@ func exitDownloadError(err error) {
 // defaultOutputName 根据 URL 路径推导安全的默认输出文件名。
 func defaultOutputName(rawURL string) string {
 	if u, err := url.Parse(rawURL); err == nil {
-		return safeBaseName(path.Base(u.Path))
+		return defaultSourceOutputName(u.Path)
 	}
 	return "download.bin"
+}
+
+// reorderArgs 将选项移动到位置参数之前，使选项可以出现在 URL 前后。
+func reorderArgs(args []string) []string {
+	var flags []string
+	var positional []string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positional = append(positional, arg)
+			continue
+		}
+
+		flags = append(flags, arg)
+		name := strings.TrimLeft(arg, "-")
+		if name == "" || strings.Contains(name, "=") {
+			continue
+		}
+
+		defined := flag.CommandLine.Lookup(name)
+		if defined == nil {
+			// 未知选项交给 flag.Parse 统一报错，避免误吞位置参数。
+			continue
+		}
+		if boolFlag, ok := defined.Value.(interface{ IsBoolFlag() bool }); ok && boolFlag.IsBoolFlag() {
+			continue
+		}
+		if i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+
+	return append(flags, positional...)
+}
+
+// parsePullArgs 解析 "pull <位置参数> [选项]" 形式的参数，允许选项在前或在后。
+func parsePullArgs(fs *flag.FlagSet, args []string, positionalName string) (string, error) {
+	var positional string
+	var flagArgs []string
+
+	appendPositional := func(value string) error {
+		if positional != "" {
+			return fmt.Errorf("只能指定一个%s", positionalName)
+		}
+		positional = value
+		return nil
+	}
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			for _, value := range args[i+1:] {
+				if err := appendPositional(value); err != nil {
+					return "", err
+				}
+			}
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			if err := appendPositional(arg); err != nil {
+				return "", err
+			}
+			continue
+		}
+
+		flagArgs = append(flagArgs, arg)
+		name := strings.TrimLeft(arg, "-")
+		if name == "" || strings.Contains(name, "=") {
+			continue
+		}
+
+		defined := fs.Lookup(name)
+		if defined == nil {
+			continue
+		}
+		if boolFlag, ok := defined.Value.(interface{ IsBoolFlag() bool }); ok && boolFlag.IsBoolFlag() {
+			continue
+		}
+		if i+1 < len(args) {
+			i++
+			flagArgs = append(flagArgs, args[i])
+		}
+	}
+
+	if err := fs.Parse(flagArgs); err != nil {
+		return "", err
+	}
+	if positional == "" {
+		return "", fmt.Errorf("缺少%s", positionalName)
+	}
+	return positional, nil
 }

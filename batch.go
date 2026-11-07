@@ -130,12 +130,7 @@ func runBatch(ctx context.Context, tasks []downloadTask) []batchResult {
 
 				started := time.Now()
 				batchLogf("[批量] 开始下载 (%d/%d): %s\n", index+1, len(tasks), task.OutputPath)
-				err := download(ctx, NewHTTPSource(task.URL), task.OutputPath, filepath.Base(task.OutputPath), true)
-				if err == nil {
-					if removeErr := os.Remove(StatePath(task.OutputPath)); removeErr != nil && !os.IsNotExist(removeErr) {
-						err = fmt.Errorf("删除状态文件失败: %w", removeErr)
-					}
-				}
+				err := executeDownloadTask(ctx, task)
 
 				duration := time.Since(started)
 				results[index] = batchResult{Task: task, Err: err, Duration: duration}
@@ -166,6 +161,23 @@ func runBatch(ctx context.Context, tasks []downloadTask) []batchResult {
 	close(jobs)
 	wg.Wait()
 	return results
+}
+
+// executeDownloadTask 创建任务对应的数据源并执行批量下载。
+func executeDownloadTask(ctx context.Context, task downloadTask) error {
+	src, err := newSource(task.URL)
+	if err != nil {
+		return err
+	}
+	defer closeSource(src)
+
+	err = download(ctx, src, task.OutputPath, filepath.Base(task.OutputPath), true)
+	if err == nil {
+		if removeErr := os.Remove(StatePath(task.OutputPath)); removeErr != nil && !os.IsNotExist(removeErr) {
+			err = fmt.Errorf("删除状态文件失败: %w", removeErr)
+		}
+	}
+	return err
 }
 
 // batchLogf 串行输出批量下载日志，避免多个文件互相穿插。
