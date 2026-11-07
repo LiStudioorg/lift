@@ -1,0 +1,14 @@
+# 编译产物
+/lift
+/lift.exe
+/dist/
+*.bin
+
+# 断点续传状态
+*.lift
+
+# 测试与临时文件
+*.test
+*.log
+*.tmp
+coverage.*
