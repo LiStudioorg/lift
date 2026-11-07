@@ -13,6 +13,11 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "docker" {
+		dockerCLI(os.Args[2:])
+		return
+	}
+
 	output := flag.String("o", "", "输出文件名；批量下载时作为输出目录")
 	limit := flag.Int("limit", 0, "限速（KB/s，0 表示不限速）")
 	listPath := flag.String("f", "", "包含多个 URL 的列表文件（每行一个，忽略空行和 # 注释）")

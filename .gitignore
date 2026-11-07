@@ -3,6 +3,7 @@
 /lift.exe
 /dist/
 *.bin
+*.tar
 
 # 断点续传状态
 *.lift
