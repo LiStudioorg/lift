@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -16,12 +16,16 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/LiStudioorg/lift/internal/config"
+	"github.com/LiStudioorg/lift/internal/core"
+	"github.com/LiStudioorg/lift/internal/protocol"
 )
 
 const listenQueueSize = 128
 
-// listenOptions 是 listen 子命令的配置。
-type listenOptions struct {
+// Options 是 listen 子命令的配置。
+type Options struct {
 	Host      string
 	Port      int
 	OutputDir string
@@ -51,8 +55,8 @@ type listenTask struct {
 type listenServer struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
-	options       listenOptions
-	sourceOptions sourceOptions
+	options       Options
+	sourceOptions protocol.Options
 	jobs          chan *listenTask
 
 	tasksMu sync.Mutex
@@ -63,38 +67,42 @@ type listenServer struct {
 	closeOnce sync.Once
 }
 
-// listenCLI 处理 listen 子命令。
-func listenCLI(args []string) {
+// CLI 处理 listen 子命令。
+func CLI(args []string) int {
 	fs := flag.NewFlagSet("listen", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	fs.Usage = listenUsage
 	host := fs.String("host", "127.0.0.1", "监听地址（默认仅本机）")
 	port := fs.Int("port", 16800, "监听端口")
 	output := fs.String("o", "", "下载目录（默认使用配置 download_dir 或当前目录）")
 	limit := fs.Int("limit", 0, "限速（KB/s，0 表示不限速）")
 	proxy := fs.String("proxy", "", "代理地址（支持 http:// 和 socks5://）")
 	mirror := fs.String("mirror", "", "镜像模板，逗号分隔，例如 https://ghproxy.com/{url}")
-	var cliHeaders headerList
+	var cliHeaders config.HeaderList
 	fs.Var(&cliHeaders, "H", "自定义请求头，可多次指定，例如 -H \"Cookie: xxx\"")
 
 	if err := fs.Parse(args); err != nil {
-		os.Exit(2)
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "参数错误: listen 不接受位置参数: %s\n", strings.Join(fs.Args(), " "))
 		listenUsage()
-		os.Exit(2)
+		return 2
 	}
 
-	cfg, err := loadConfig()
+	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "配置错误: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
-	visited := visitedFlags(fs)
-	applyStringDefault(host, visited, "host", cfg.Listen.Host)
-	applyIntDefault(port, visited, "port", cfg.Listen.Port)
-	applyIntDefault(limit, visited, "limit", cfg.Limit)
-	applyStringDefault(proxy, visited, "proxy", cfg.Proxy)
+	visited := config.VisitedFlags(fs)
+	config.ApplyStringDefault(host, visited, "host", cfg.Listen.Host)
+	config.ApplyIntDefault(port, visited, "port", cfg.Listen.Port)
+	config.ApplyIntDefault(limit, visited, "limit", cfg.Limit)
+	config.ApplyStringDefault(proxy, visited, "proxy", cfg.Proxy)
 	if !visited["o"] && cfg.DownloadDir != "" {
 		*output = cfg.DownloadDir
 	}
@@ -103,50 +111,46 @@ func listenCLI(args []string) {
 	}
 	if err := os.MkdirAll(*output, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "创建下载目录失败: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
 
 	headerLines := []string(cliHeaders)
 	if !visited["H"] && len(cfg.Headers) > 0 {
 		headerLines = cfg.Headers
 	}
-	headers, err := headersFromLines(headerLines)
+	headers, err := config.HeadersFromLines(headerLines)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "参数错误: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
-	mirrors := parseMirrorFlag(*mirror)
+	mirrors := config.ParseMirrorFlag(*mirror)
 	if !visited["mirror"] && len(cfg.Mirrors) > 0 {
 		mirrors = cfg.Mirrors
 	}
 
-	InitLimiter(*limit)
-	if err := InitProxy(*proxy); err != nil {
+	core.InitLimiter(*limit)
+	if err := core.InitProxy(*proxy); err != nil {
 		fmt.Fprintf(os.Stderr, "参数错误: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	options := listenOptions{
+	options := Options{
 		Host:      *host,
 		Port:      *port,
 		OutputDir: *output,
 		LimitKBps: *limit,
 		Proxy:     *proxy,
 	}
-	srcOptions := sourceOptions{
-		s3:      cfg.configS3Options(),
-		sftp:    cfg.configSFTPOptions(),
-		headers: headers,
-		mirrors: mirrors,
-	}
+	srcOptions := protocol.OptionsFromConfig(cfg, headers, mirrors)
 
 	if err := runListen(ctx, options, srcOptions); err != nil {
 		fmt.Fprintf(os.Stderr, "[listen] 服务异常退出: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func listenUsage() {
@@ -154,7 +158,7 @@ func listenUsage() {
 }
 
 // runListen 启动 HTTP API 服务，等待退出信号后优雅关闭。
-func runListen(ctx context.Context, options listenOptions, srcOptions sourceOptions) error {
+func runListen(ctx context.Context, options Options, srcOptions protocol.Options) error {
 	address := net.JoinHostPort(options.Host, strconv.Itoa(options.Port))
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
@@ -200,7 +204,7 @@ func runListen(ctx context.Context, options listenOptions, srcOptions sourceOpti
 }
 
 // newListenServer 创建任务队列并启动固定数量的下载 worker。
-func newListenServer(ctx context.Context, options listenOptions, srcOptions sourceOptions) *listenServer {
+func newListenServer(ctx context.Context, options Options, srcOptions protocol.Options) *listenServer {
 	serverCtx, cancel := context.WithCancel(ctx)
 	server := &listenServer{
 		ctx:           serverCtx,
@@ -209,7 +213,7 @@ func newListenServer(ctx context.Context, options listenOptions, srcOptions sour
 		sourceOptions: srcOptions,
 		jobs:          make(chan *listenTask, listenQueueSize),
 	}
-	for i := 0; i < maxConcurrentFiles; i++ {
+	for i := 0; i < core.MaxConcurrentFiles; i++ {
 		server.wg.Add(1)
 		go server.worker()
 	}
@@ -319,11 +323,11 @@ func (s *listenServer) enqueue(request downloadAPIRequest) (listenTask, error) {
 	}
 
 	rawURL := strings.TrimSpace(request.URL)
-	probe, err := newSourceWithOptions(rawURL, s.sourceOptions)
+	probe, err := protocol.NewSource(rawURL, s.sourceOptions)
 	if err != nil {
 		return listenTask{}, err
 	}
-	closeSource(probe)
+	core.CloseSource(probe)
 
 	output, err := s.reserveOutput(rawURL, strings.TrimSpace(request.Output))
 	if err != nil {
@@ -345,7 +349,7 @@ func (s *listenServer) enqueue(request downloadAPIRequest) (listenTask, error) {
 
 	select {
 	case s.jobs <- task:
-		batchLogf("[listen] 接收任务 #%d: %s -> %s\n", task.ID, rawURL, output)
+		core.Logf("[listen] 接收任务 #%d: %s -> %s\n", task.ID, rawURL, output)
 		return snapshot, nil
 	case <-s.ctx.Done():
 		s.finishTask(task, "failed", s.ctx.Err())
@@ -366,11 +370,11 @@ func (s *listenServer) reserveOutput(rawURL, requested string) (string, error) {
 	var candidate string
 	switch {
 	case requested == "":
-		candidate = filepath.Join(baseDir, safeBaseName(defaultOutputName(rawURL)))
+		candidate = filepath.Join(baseDir, core.SafeBaseName(core.DefaultOutputName(rawURL)))
 	case filepath.IsAbs(requested):
 		candidate = requested
 	default:
-		candidate = filepath.Join(baseDir, safeBaseName(requested))
+		candidate = filepath.Join(baseDir, core.SafeBaseName(requested))
 	}
 	if err := os.MkdirAll(filepath.Dir(candidate), 0o755); err != nil {
 		return "", fmt.Errorf("创建输出目录失败: %w", err)
@@ -419,19 +423,19 @@ func (s *listenServer) worker() {
 			task.StartedAt = &now
 			label := fmt.Sprintf("#%d", task.ID)
 			s.tasksMu.Unlock()
-			batchLogf("[listen] 开始任务 %s: %s\n", label, task.Output)
+			core.Logf("[listen] 开始任务 %s: %s\n", label, task.Output)
 
 			err := s.downloadTask(task)
 			switch {
 			case err == nil:
 				s.finishTask(task, "success", nil)
-				batchLogf("[listen] 完成任务 %s: %s\n", label, task.Output)
+				core.Logf("[listen] 完成任务 %s: %s\n", label, task.Output)
 			case errors.Is(err, context.Canceled):
 				s.finishTask(task, "canceled", err)
-				batchLogf("[listen] 取消任务 %s: %s\n", label, task.Output)
+				core.Logf("[listen] 取消任务 %s: %s\n", label, task.Output)
 			default:
 				s.finishTask(task, "failed", err)
-				batchLogf("[listen] 任务失败 %s: %s | %v\n", label, task.Output, err)
+				core.Logf("[listen] 任务失败 %s: %s | %v\n", label, task.Output, err)
 			}
 		}
 	}
@@ -439,15 +443,15 @@ func (s *listenServer) worker() {
 
 // downloadTask 使用现有下载引擎执行单个后台任务。
 func (s *listenServer) downloadTask(task *listenTask) error {
-	src, err := newSourceWithOptions(task.URL, s.sourceOptions)
+	src, err := protocol.NewSource(task.URL, s.sourceOptions)
 	if err != nil {
 		return err
 	}
-	defer closeSource(src)
+	defer core.CloseSource(src)
 
-	err = download(s.ctx, src, task.Output, filepath.Base(task.Output), true)
+	err = core.DownloadTo(s.ctx, src, task.Output, filepath.Base(task.Output), true)
 	if err == nil {
-		if removeErr := os.Remove(StatePath(task.Output)); removeErr != nil && !os.IsNotExist(removeErr) {
+		if removeErr := os.Remove(core.StatePath(task.Output)); removeErr != nil && !os.IsNotExist(removeErr) {
 			return fmt.Errorf("删除状态文件失败: %w", removeErr)
 		}
 	}

@@ -1,0 +1,426 @@
+# GoReleaser 配置：完整 GOOS/GOARCH 矩阵，排除工具链或依赖不支持的目标。
+version: 2
+
+project_name: lift
+
+before:
+  hooks:
+    # 发布前统一下载依赖，避免并行构建重复拉取模块。
+    - go mod download
+
+builds:
+  - id: lift
+    main: .
+    binary: lift
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/LiStudioorg/lift/internal/version.Version={{ .Tag }}
+      - -X github.com/LiStudioorg/lift/internal/version.GitCommit={{ .Commit }}
+      - -X github.com/LiStudioorg/lift/internal/version.BuiltAt={{ .Date }}
+    goos:
+      - aix
+      - android
+      - darwin
+      - dragonfly
+      - freebsd
+      - illumos
+      - js
+      - linux
+      - netbsd
+      - openbsd
+      - plan9
+      - solaris
+      - wasip1
+      - windows
+    goarch:
+      - 386
+      - amd64
+      - arm
+      - arm64
+      - loong64
+      - mips
+      - mips64
+      - mips64le
+      - mipsle
+      - ppc64
+      - ppc64le
+      - riscv64
+      - s390x
+      - wasm
+    ignore:
+      # 排除 iOS（不在 goos 矩阵中，保留以明确发布约束）。
+      - goos: ios
+        goarch: amd64
+      - goos: ios
+        goarch: arm64
+      # 排除 Go 工具链不支持的 GOOS/GOARCH 组合。
+      - goos: aix
+        goarch: 386
+      - goos: aix
+        goarch: amd64
+      - goos: aix
+        goarch: arm
+      - goos: aix
+        goarch: arm64
+      - goos: aix
+        goarch: loong64
+      - goos: aix
+        goarch: mips
+      - goos: aix
+        goarch: mips64
+      - goos: aix
+        goarch: mips64le
+      - goos: aix
+        goarch: mipsle
+      - goos: aix
+        goarch: ppc64le
+      - goos: aix
+        goarch: riscv64
+      - goos: aix
+        goarch: s390x
+      - goos: aix
+        goarch: wasm
+      - goos: android
+        goarch: loong64
+      - goos: android
+        goarch: mips
+      - goos: android
+        goarch: mips64
+      - goos: android
+        goarch: mips64le
+      - goos: android
+        goarch: mipsle
+      - goos: android
+        goarch: ppc64
+      - goos: android
+        goarch: ppc64le
+      - goos: android
+        goarch: riscv64
+      - goos: android
+        goarch: s390x
+      - goos: android
+        goarch: wasm
+      - goos: darwin
+        goarch: 386
+      - goos: darwin
+        goarch: arm
+      - goos: darwin
+        goarch: loong64
+      - goos: darwin
+        goarch: mips
+      - goos: darwin
+        goarch: mips64
+      - goos: darwin
+        goarch: mips64le
+      - goos: darwin
+        goarch: mipsle
+      - goos: darwin
+        goarch: ppc64
+      - goos: darwin
+        goarch: ppc64le
+      - goos: darwin
+        goarch: riscv64
+      - goos: darwin
+        goarch: s390x
+      - goos: darwin
+        goarch: wasm
+      - goos: dragonfly
+        goarch: 386
+      - goos: dragonfly
+        goarch: arm
+      - goos: dragonfly
+        goarch: arm64
+      - goos: dragonfly
+        goarch: loong64
+      - goos: dragonfly
+        goarch: mips
+      - goos: dragonfly
+        goarch: mips64
+      - goos: dragonfly
+        goarch: mips64le
+      - goos: dragonfly
+        goarch: mipsle
+      - goos: dragonfly
+        goarch: ppc64
+      - goos: dragonfly
+        goarch: ppc64le
+      - goos: dragonfly
+        goarch: riscv64
+      - goos: dragonfly
+        goarch: s390x
+      - goos: dragonfly
+        goarch: wasm
+      - goos: freebsd
+        goarch: loong64
+      - goos: freebsd
+        goarch: mips
+      - goos: freebsd
+        goarch: mips64
+      - goos: freebsd
+        goarch: mips64le
+      - goos: freebsd
+        goarch: mipsle
+      - goos: freebsd
+        goarch: ppc64
+      - goos: freebsd
+        goarch: ppc64le
+      - goos: freebsd
+        goarch: riscv64
+      - goos: freebsd
+        goarch: s390x
+      - goos: freebsd
+        goarch: wasm
+      - goos: illumos
+        goarch: 386
+      - goos: illumos
+        goarch: arm
+      - goos: illumos
+        goarch: arm64
+      - goos: illumos
+        goarch: loong64
+      - goos: illumos
+        goarch: mips
+      - goos: illumos
+        goarch: mips64
+      - goos: illumos
+        goarch: mips64le
+      - goos: illumos
+        goarch: mipsle
+      - goos: illumos
+        goarch: ppc64
+      - goos: illumos
+        goarch: ppc64le
+      - goos: illumos
+        goarch: riscv64
+      - goos: illumos
+        goarch: s390x
+      - goos: illumos
+        goarch: wasm
+      - goos: js
+        goarch: 386
+      - goos: js
+        goarch: amd64
+      - goos: js
+        goarch: arm
+      - goos: js
+        goarch: arm64
+      - goos: js
+        goarch: loong64
+      - goos: js
+        goarch: mips
+      - goos: js
+        goarch: mips64
+      - goos: js
+        goarch: mips64le
+      - goos: js
+        goarch: mipsle
+      - goos: js
+        goarch: ppc64
+      - goos: js
+        goarch: ppc64le
+      - goos: js
+        goarch: riscv64
+      - goos: js
+        goarch: s390x
+      - goos: linux
+        goarch: wasm
+      - goos: netbsd
+        goarch: loong64
+      - goos: netbsd
+        goarch: mips
+      - goos: netbsd
+        goarch: mips64
+      - goos: netbsd
+        goarch: mips64le
+      - goos: netbsd
+        goarch: mipsle
+      - goos: netbsd
+        goarch: ppc64
+      - goos: netbsd
+        goarch: ppc64le
+      - goos: netbsd
+        goarch: riscv64
+      - goos: netbsd
+        goarch: s390x
+      - goos: netbsd
+        goarch: wasm
+      - goos: openbsd
+        goarch: loong64
+      - goos: openbsd
+        goarch: mips
+      - goos: openbsd
+        goarch: mips64
+      - goos: openbsd
+        goarch: mips64le
+      - goos: openbsd
+        goarch: mipsle
+      - goos: openbsd
+        goarch: ppc64le
+      - goos: openbsd
+        goarch: s390x
+      - goos: openbsd
+        goarch: wasm
+      - goos: plan9
+        goarch: arm64
+      - goos: plan9
+        goarch: loong64
+      - goos: plan9
+        goarch: mips
+      - goos: plan9
+        goarch: mips64
+      - goos: plan9
+        goarch: mips64le
+      - goos: plan9
+        goarch: mipsle
+      - goos: plan9
+        goarch: ppc64
+      - goos: plan9
+        goarch: ppc64le
+      - goos: plan9
+        goarch: riscv64
+      - goos: plan9
+        goarch: s390x
+      - goos: plan9
+        goarch: wasm
+      - goos: solaris
+        goarch: 386
+      - goos: solaris
+        goarch: arm
+      - goos: solaris
+        goarch: arm64
+      - goos: solaris
+        goarch: loong64
+      - goos: solaris
+        goarch: mips
+      - goos: solaris
+        goarch: mips64
+      - goos: solaris
+        goarch: mips64le
+      - goos: solaris
+        goarch: mipsle
+      - goos: solaris
+        goarch: ppc64
+      - goos: solaris
+        goarch: ppc64le
+      - goos: solaris
+        goarch: riscv64
+      - goos: solaris
+        goarch: s390x
+      - goos: solaris
+        goarch: wasm
+      - goos: wasip1
+        goarch: 386
+      - goos: wasip1
+        goarch: amd64
+      - goos: wasip1
+        goarch: arm
+      - goos: wasip1
+        goarch: arm64
+      - goos: wasip1
+        goarch: loong64
+      - goos: wasip1
+        goarch: mips
+      - goos: wasip1
+        goarch: mips64
+      - goos: wasip1
+        goarch: mips64le
+      - goos: wasip1
+        goarch: mipsle
+      - goos: wasip1
+        goarch: ppc64
+      - goos: wasip1
+        goarch: ppc64le
+      - goos: wasip1
+        goarch: riscv64
+      - goos: wasip1
+        goarch: s390x
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: loong64
+      - goos: windows
+        goarch: mips
+      - goos: windows
+        goarch: mips64
+      - goos: windows
+        goarch: mips64le
+      - goos: windows
+        goarch: mipsle
+      - goos: windows
+        goarch: ppc64
+      - goos: windows
+        goarch: ppc64le
+      - goos: windows
+        goarch: riscv64
+      - goos: windows
+        goarch: s390x
+      - goos: windows
+        goarch: wasm
+      # 排除依赖链在当前 CGO_ENABLED=0 构建下无法编译的目标。
+      - goos: aix
+        goarch: ppc64
+      - goos: android
+        goarch: 386
+      - goos: android
+        goarch: amd64
+      - goos: android
+        goarch: arm
+      - goos: android
+        goarch: arm64
+      - goos: dragonfly
+        goarch: amd64
+      - goos: illumos
+        goarch: amd64
+      - goos: linux
+        goarch: loong64
+      - goos: linux
+        goarch: riscv64
+      - goos: netbsd
+        goarch: 386
+      - goos: netbsd
+        goarch: amd64
+      - goos: netbsd
+        goarch: arm
+      - goos: netbsd
+        goarch: arm64
+      - goos: openbsd
+        goarch: 386
+      - goos: openbsd
+        goarch: amd64
+      - goos: openbsd
+        goarch: arm
+      - goos: openbsd
+        goarch: arm64
+      - goos: openbsd
+        goarch: ppc64
+      - goos: openbsd
+        goarch: riscv64
+      - goos: plan9
+        goarch: 386
+      - goos: plan9
+        goarch: amd64
+      - goos: plan9
+        goarch: arm
+      - goos: solaris
+        goarch: amd64
+      - goos: wasip1
+        goarch: wasm
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc

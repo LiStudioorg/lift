@@ -1,4 +1,4 @@
-package main
+package torrent
 
 import (
 	"context"
@@ -12,8 +12,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/anacrolix/torrent"
+	anacrolix "github.com/anacrolix/torrent"
 	"golang.org/x/time/rate"
+
+	"github.com/LiStudioorg/lift/internal/cli"
+	"github.com/LiStudioorg/lift/internal/config"
+	"github.com/LiStudioorg/lift/internal/core"
 )
 
 // magnetOptions 是 magnet 子命令的参数。
@@ -24,39 +28,43 @@ type magnetOptions struct {
 	NoDHT      bool
 }
 
-// magnetCLI 处理 magnet 子命令。
-func magnetCLI(args []string) {
+// CLI 实现 "lift magnet" 子命令。
+func CLI(args []string) int {
 	fs := flag.NewFlagSet("magnet", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	fs.Usage = magnetUsage
 	output := fs.String("o", ".", "输出目录")
 	limit := fs.Int("limit", 0, "限速（KB/s，0 表示不限速）")
 	listenPort := fs.Int("port", 0, "BT 监听端口（0 表示随机端口）")
 	noDHT := fs.Bool("no-dht", false, "禁用 DHT，仅使用磁力链中的 Tracker")
 
-	uri, err := parsePullArgs(fs, args, "磁力链接")
+	uri, err := cli.ParsePullArgs(fs, args, "磁力链接")
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		fmt.Fprintf(os.Stderr, "参数错误: %v\n", err)
 		magnetUsage()
-		os.Exit(2)
+		return 2
 	}
 	if !strings.HasPrefix(strings.ToLower(uri), "magnet:?") {
 		fmt.Fprintf(os.Stderr, "参数错误: 无效的磁力链接（必须以 magnet:? 开头）\n")
 		magnetUsage()
-		os.Exit(2)
+		return 2
 	}
 
-	cfg, err := loadConfig()
+	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "配置错误: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
-	visited := visitedFlags(fs)
-	applyIntDefault(limit, visited, "limit", cfg.Limit)
+	visited := config.VisitedFlags(fs)
+	config.ApplyIntDefault(limit, visited, "limit", cfg.Limit)
 	if !visited["o"] && cfg.DownloadDir != "" {
 		*output = cfg.DownloadDir
 	}
 
-	InitLimiter(*limit)
+	core.InitLimiter(*limit)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -69,12 +77,13 @@ func magnetCLI(args []string) {
 	})
 	if errors.Is(err, context.Canceled) {
 		fmt.Println("\n[BT] 下载已中断，已完成的 Piece 已保留，可重新运行同一磁力链继续下载。")
-		os.Exit(130)
+		return 130
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "磁力链下载失败: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func magnetUsage() {
@@ -97,18 +106,18 @@ func runMagnet(ctx context.Context, options magnetOptions) error {
 		return fmt.Errorf("解析输出目录失败: %w", err)
 	}
 
-	cfg := torrent.NewDefaultClientConfig()
+	cfg := anacrolix.NewDefaultClientConfig()
 	cfg.DataDir = absOutputDir
 	cfg.ListenPort = options.ListenPort
 	cfg.NoDHT = options.NoDHT
 	cfg.NoDefaultPortForwarding = true
-	cfg.DownloadRateLimiter = globalLimiter
-	if globalLimiter != nil {
+	cfg.DownloadRateLimiter = core.Limiter()
+	if limiter := core.Limiter(); limiter != nil {
 		// 上传和下载分别使用独立限速器，避免两个方向争抢同一桶令牌。
-		cfg.UploadRateLimiter = rate.NewLimiter(globalLimiter.Limit(), globalLimiter.Burst())
+		cfg.UploadRateLimiter = rate.NewLimiter(limiter.Limit(), limiter.Burst())
 	}
 
-	client, err := torrent.NewClient(cfg)
+	client, err := anacrolix.NewClient(cfg)
 	if err != nil {
 		return fmt.Errorf("初始化 BitTorrent 客户端失败: %w", err)
 	}
@@ -190,7 +199,7 @@ func runMagnet(ctx context.Context, options magnetOptions) error {
 			if total > 0 && downloaded >= total {
 				eta = "00:00"
 			} else if speed >= 1 {
-				eta = formatETA(float64(total-downloaded) / speed)
+				eta = core.FormatETA(float64(total-downloaded) / speed)
 			}
 
 			printTorrentProgress(fmt.Sprintf("进度: %5.1f%% | 已下载: %s/%s | Peers: %d | 种子: %d | 速度: %.2fMB/s | 剩余: %s",
@@ -217,9 +226,7 @@ func runMagnet(ctx context.Context, options magnetOptions) error {
 
 // printTorrentProgress 使用回车刷新单行进度。
 func printTorrentProgress(line string) {
-	outputMu.Lock()
-	defer outputMu.Unlock()
-	fmt.Printf("\r[BT] %s", line)
+	core.Logf("\r[BT] %s", line)
 }
 
 // shortMagnet 截断过长的磁力链，避免刷屏。

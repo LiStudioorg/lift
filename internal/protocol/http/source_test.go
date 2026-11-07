@@ -1,10 +1,10 @@
-package main
+package http
 
 import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
+	nethttp "net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -13,7 +13,7 @@ import (
 )
 
 // servePayload 提供支持 HEAD 和 Range 的测试文件服务。
-func servePayload(w http.ResponseWriter, r *http.Request, payload []byte) {
+func servePayload(w nethttp.ResponseWriter, r *nethttp.Request, payload []byte) {
 	w.Header().Set("ETag", `"test-etag"`)
 	start := 0
 	if rangeHeader := r.Header.Get("Range"); strings.HasPrefix(rangeHeader, "bytes=") {
@@ -22,16 +22,16 @@ func servePayload(w http.ResponseWriter, r *http.Request, payload []byte) {
 			start = parsed
 		}
 		if start < 0 || start > len(payload) {
-			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			w.WriteHeader(nethttp.StatusRequestedRangeNotSatisfiable)
 			return
 		}
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, len(payload)-1, len(payload)))
 		w.Header().Set("Content-Length", strconv.Itoa(len(payload)-start))
-		w.WriteHeader(http.StatusPartialContent)
+		w.WriteHeader(nethttp.StatusPartialContent)
 	} else {
 		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 	}
-	if r.Method != http.MethodHead {
+	if r.Method != nethttp.MethodHead {
 		_, _ = w.Write(payload[start:])
 	}
 }
@@ -41,9 +41,9 @@ func TestHTTPSourceInjectsHeaders(t *testing.T) {
 	var mu sync.Mutex
 	var requests []string
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
 		if r.Header.Get("X-Test") != "yes" || r.Header.Get("Referer") != "https://example.com/" {
-			http.Error(w, "missing custom headers", http.StatusForbidden)
+			nethttp.Error(w, "missing custom headers", nethttp.StatusForbidden)
 			return
 		}
 		mu.Lock()
@@ -53,11 +53,11 @@ func TestHTTPSourceInjectsHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	headers := http.Header{
+	headers := nethttp.Header{
 		"X-Test":  {"yes"},
 		"Referer": {"https://example.com/"},
 	}
-	src := NewHTTPSource(server.URL+"/file.bin", headers)
+	src := NewSource(server.URL+"/file.bin", headers)
 
 	info, err := src.Stat(context.Background())
 	if err != nil {

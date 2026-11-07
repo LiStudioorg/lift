@@ -1,25 +1,25 @@
-package main
+package http
 
 import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
+	nethttp "net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
+
+	"github.com/LiStudioorg/lift/internal/core"
 )
 
-// mirrorEndpoint 是展开后的单个镜像地址。
 type mirrorEndpoint struct {
 	url    string
-	source *HTTPSource
+	source *Source
 }
 
 // mirrorSource 在主 URL 失败时按顺序尝试镜像。
 type mirrorSource struct {
-	primary    Source
+	primary    core.Source
 	primaryURL string
 	mirrors    []mirrorEndpoint
 
@@ -28,9 +28,8 @@ type mirrorSource struct {
 	used         map[string]bool
 }
 
-// expandMirrorTemplates 将原始 URL 填入镜像模板。
-// 支持 {url}、{url_encoded}；模板不含占位符时按前缀拼接。
-func expandMirrorTemplates(templates []string, rawURL string) []string {
+// ExpandMirrorTemplates 将 {url} 和 {url_encoded} 替换到模板中。不含占位符的模板按前缀处理。
+func ExpandMirrorTemplates(templates []string, rawURL string) []string {
 	expanded := make([]string, 0, len(templates))
 	escaped := url.QueryEscape(rawURL)
 	for _, template := range templates {
@@ -49,9 +48,9 @@ func expandMirrorTemplates(templates []string, rawURL string) []string {
 	return expanded
 }
 
-// newMirrorSource 为 HTTP 主源创建镜像回退包装。
-func newMirrorSource(primary Source, rawURL string, templates []string, headers http.Header) (Source, error) {
-	expanded := expandMirrorTemplates(templates, rawURL)
+// NewMirrorSource 为 HTTP 主下载源包装镜像回退能力。
+func NewMirrorSource(primary core.Source, rawURL string, templates []string, headers nethttp.Header) (core.Source, error) {
+	expanded := ExpandMirrorTemplates(templates, rawURL)
 	if len(expanded) == 0 {
 		return primary, nil
 	}
@@ -69,7 +68,7 @@ func newMirrorSource(primary Source, rawURL string, templates []string, headers 
 		}
 		mirrors = append(mirrors, mirrorEndpoint{
 			url:    mirrorURL,
-			source: NewHTTPSource(mirrorURL, headers),
+			source: NewSource(mirrorURL, headers),
 		})
 	}
 
@@ -81,13 +80,12 @@ func newMirrorSource(primary Source, rawURL string, templates []string, headers 
 	}, nil
 }
 
-// URL 返回主 URL，保证状态文件仍以原始地址作为标识。
 func (s *mirrorSource) URL() string {
 	return s.primaryURL
 }
 
-// Stat 在主源失败时依次尝试镜像。
-func (s *mirrorSource) Stat(ctx context.Context) (*ObjectInfo, error) {
+// Stat 先尝试主下载源，再依次尝试各镜像。
+func (s *mirrorSource) Stat(ctx context.Context) (*core.ObjectInfo, error) {
 	info, err := s.primary.Stat(ctx)
 	if err == nil {
 		return info, nil
@@ -111,7 +109,7 @@ func (s *mirrorSource) Stat(ctx context.Context) (*ObjectInfo, error) {
 	return nil, fmt.Errorf("主 URL 失败: %v；所有镜像均失败: %v", err, lastErr)
 }
 
-// OpenStream 在主源失败时依次尝试镜像。
+// OpenStream 先尝试主下载源，再依次尝试各镜像。
 func (s *mirrorSource) OpenStream(ctx context.Context, offset int64) (io.ReadCloser, error) {
 	body, err := s.primary.OpenStream(ctx, offset)
 	if err == nil {
@@ -136,7 +134,6 @@ func (s *mirrorSource) OpenStream(ctx context.Context, offset int64) (io.ReadClo
 	return nil, fmt.Errorf("主 URL 失败: %v；所有镜像均失败: %v", err, lastErr)
 }
 
-// Close 关闭实现了 io.Closer 的主源。
 func (s *mirrorSource) Close() error {
 	if closer, ok := s.primary.(io.Closer); ok {
 		_ = closer.Close()
@@ -144,16 +141,12 @@ func (s *mirrorSource) Close() error {
 	return nil
 }
 
-// logFallback 只在首次触发回退时输出提示，避免分块下载刷屏。
 func (s *mirrorSource) logFallback(err error) {
 	s.fallbackOnce.Do(func() {
-		outputMu.Lock()
-		defer outputMu.Unlock()
-		fmt.Fprintf(os.Stderr, "\n[镜像] 主 URL 请求失败，尝试镜像: %v\n", err)
+		core.LogErrorf("\n[镜像] 主 URL 请求失败，尝试镜像: %v\n", err)
 	})
 }
 
-// logMirrorUsed 首次使用某个镜像时输出提示。
 func (s *mirrorSource) logMirrorUsed(mirrorURL string) {
 	s.usedMu.Lock()
 	if s.used[mirrorURL] {
@@ -163,7 +156,5 @@ func (s *mirrorSource) logMirrorUsed(mirrorURL string) {
 	s.used[mirrorURL] = true
 	s.usedMu.Unlock()
 
-	outputMu.Lock()
-	defer outputMu.Unlock()
-	fmt.Fprintf(os.Stderr, "[镜像] 使用镜像成功: %s\n", mirrorURL)
+	core.LogErrorf("[镜像] 使用镜像成功: %s\n", mirrorURL)
 }

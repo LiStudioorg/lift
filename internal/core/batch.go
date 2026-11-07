@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"bufio"
@@ -11,23 +11,27 @@ import (
 	"time"
 )
 
-const maxConcurrentFiles = 2
+// MaxConcurrentFiles 是批量下载器和 HTTP API 服务允许同时下载的最大文件数。
+const MaxConcurrentFiles = 2
 
-// downloadTask 表示一个文件级下载任务。
-type downloadTask struct {
+// BatchTask 是文件级下载任务。
+type BatchTask struct {
 	URL        string
 	OutputPath string
 }
 
-// batchResult 表示单个任务的执行结果。
-type batchResult struct {
-	Task     downloadTask
+// BatchResult 是单个批量任务的结果。
+type BatchResult struct {
+	Task     BatchTask
 	Err      error
 	Duration time.Duration
 }
 
-// collectURLs 合并命令行 URL 和列表文件中的 URL，忽略空行与 # 注释。
-func collectURLs(args []string, listPath string) ([]string, error) {
+// SourceFactory 为 URL 创建下载源。
+type SourceFactory func(rawURL string) (Source, error)
+
+// CollectURLs 合并命令行 URL 和列表文件条目，忽略空行和 # 注释。
+func CollectURLs(args []string, listPath string) ([]string, error) {
 	var urls []string
 	for _, arg := range args {
 		if value := strings.TrimSpace(arg); value != "" {
@@ -61,8 +65,8 @@ func collectURLs(args []string, listPath string) ([]string, error) {
 	return urls, nil
 }
 
-// buildTasks 为每个 URL 规划输出路径。批量下载时 -o 作为输出目录。
-func buildTasks(urls []string, output string) ([]downloadTask, error) {
+// BuildTasks 规划输出路径。批量模式下 output 视为目录。
+func BuildTasks(urls []string, output string) ([]BatchTask, error) {
 	if len(urls) == 0 {
 		return nil, fmt.Errorf("没有可下载的 URL")
 	}
@@ -70,9 +74,9 @@ func buildTasks(urls []string, output string) ([]downloadTask, error) {
 	if len(urls) == 1 {
 		outputPath := output
 		if outputPath == "" {
-			outputPath = defaultOutputName(urls[0])
+			outputPath = DefaultOutputName(urls[0])
 		}
-		return []downloadTask{{URL: urls[0], OutputPath: outputPath}}, nil
+		return []BatchTask{{URL: urls[0], OutputPath: outputPath}}, nil
 	}
 
 	outputDir := output
@@ -83,35 +87,25 @@ func buildTasks(urls []string, output string) ([]downloadTask, error) {
 		return nil, fmt.Errorf("创建输出目录失败: %w", err)
 	}
 
-	tasks := make([]downloadTask, 0, len(urls))
+	tasks := make([]BatchTask, 0, len(urls))
 	seen := make(map[string]string, len(urls))
 	for _, rawURL := range urls {
-		outputPath := filepath.Join(outputDir, safeBaseName(defaultOutputName(rawURL)))
+		outputPath := filepath.Join(outputDir, SafeBaseName(DefaultOutputName(rawURL)))
 		if previous, exists := seen[outputPath]; exists {
 			return nil, fmt.Errorf("多个 URL 对应同一输出文件 %s（%s 与 %s）", outputPath, previous, rawURL)
 		}
 		seen[outputPath] = rawURL
-		tasks = append(tasks, downloadTask{URL: rawURL, OutputPath: outputPath})
+		tasks = append(tasks, BatchTask{URL: rawURL, OutputPath: outputPath})
 	}
 	return tasks, nil
 }
 
-// safeBaseName 仅保留文件名部分，防止 URL 中的 ../ 造成目录穿越。
-func safeBaseName(name string) string {
-	name = strings.ReplaceAll(name, "\\", "/")
-	name = filepath.Base(name)
-	if name == "" || name == "." || name == ".." || name == "/" {
-		return "download.bin"
-	}
-	return name
-}
-
-// runBatch 使用固定数量 worker 执行任务队列，保证最多 maxConcurrentFiles 个文件并发下载。
-func runBatch(ctx context.Context, tasks []downloadTask) []batchResult {
-	results := make([]batchResult, len(tasks))
+// RunBatch 使用有界协程池执行任务。
+func RunBatch(ctx context.Context, tasks []BatchTask, newSource SourceFactory) []BatchResult {
+	results := make([]BatchResult, len(tasks))
 	jobs := make(chan int)
 
-	workerTotal := maxConcurrentFiles
+	workerTotal := MaxConcurrentFiles
 	if len(tasks) < workerTotal {
 		workerTotal = len(tasks)
 	}
@@ -124,21 +118,21 @@ func runBatch(ctx context.Context, tasks []downloadTask) []batchResult {
 			for index := range jobs {
 				task := tasks[index]
 				if err := ctx.Err(); err != nil {
-					results[index] = batchResult{Task: task, Err: err}
+					results[index] = BatchResult{Task: task, Err: err}
 					continue
 				}
 
 				started := time.Now()
-				batchLogf("[批量] 开始下载 (%d/%d): %s\n", index+1, len(tasks), task.OutputPath)
-				err := executeDownloadTask(ctx, task)
+				Logf("[批量] 开始下载 (%d/%d): %s\n", index+1, len(tasks), task.OutputPath)
+				err := executeDownloadTask(ctx, task, newSource)
 
 				duration := time.Since(started)
-				results[index] = batchResult{Task: task, Err: err, Duration: duration}
+				results[index] = BatchResult{Task: task, Err: err, Duration: duration}
 				if err != nil {
-					batchLogf("[批量] 失败 (%d/%d): %s | %v | 用时 %s\n",
+					Logf("[批量] 失败 (%d/%d): %s | %v | 用时 %s\n",
 						index+1, len(tasks), task.OutputPath, err, duration.Round(time.Millisecond))
 				} else {
-					batchLogf("[批量] 完成 (%d/%d): %s | 用时 %s\n",
+					Logf("[批量] 完成 (%d/%d): %s | 用时 %s\n",
 						index+1, len(tasks), task.OutputPath, duration.Round(time.Millisecond))
 				}
 			}
@@ -150,7 +144,7 @@ func runBatch(ctx context.Context, tasks []downloadTask) []batchResult {
 		case jobs <- index:
 		case <-ctx.Done():
 			for pending := index; pending < len(tasks); pending++ {
-				results[pending] = batchResult{Task: tasks[pending], Err: ctx.Err()}
+				results[pending] = BatchResult{Task: tasks[pending], Err: ctx.Err()}
 			}
 			close(jobs)
 			wg.Wait()
@@ -163,26 +157,18 @@ func runBatch(ctx context.Context, tasks []downloadTask) []batchResult {
 	return results
 }
 
-// executeDownloadTask 创建任务对应的数据源并执行批量下载。
-func executeDownloadTask(ctx context.Context, task downloadTask) error {
+func executeDownloadTask(ctx context.Context, task BatchTask, newSource SourceFactory) error {
 	src, err := newSource(task.URL)
 	if err != nil {
 		return err
 	}
-	defer closeSource(src)
+	defer CloseSource(src)
 
-	err = download(ctx, src, task.OutputPath, filepath.Base(task.OutputPath), true)
+	err = DownloadTo(ctx, src, task.OutputPath, filepath.Base(task.OutputPath), true)
 	if err == nil {
 		if removeErr := os.Remove(StatePath(task.OutputPath)); removeErr != nil && !os.IsNotExist(removeErr) {
 			err = fmt.Errorf("删除状态文件失败: %w", removeErr)
 		}
 	}
 	return err
-}
-
-// batchLogf 串行输出批量下载日志，避免多个文件互相穿插。
-func batchLogf(format string, args ...any) {
-	outputMu.Lock()
-	defer outputMu.Unlock()
-	fmt.Printf(format, args...)
 }

@@ -1,4 +1,4 @@
-package main
+package docker
 
 import (
 	"context"
@@ -21,7 +21,12 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
+
+	"github.com/LiStudioorg/lift/internal/config"
+	"github.com/LiStudioorg/lift/internal/core"
 )
+
+var errDockerHelp = errors.New("help requested")
 
 // dockerPullOptions 是 docker pull 子命令的参数。
 type dockerPullOptions struct {
@@ -34,24 +39,32 @@ type dockerPullOptions struct {
 	proxySet  bool
 }
 
-// dockerCLI 处理 docker 子命令。
-func dockerCLI(args []string) {
+// CLI 实现 "lift docker pull" 子命令。
+func CLI(args []string) int {
+	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
+		dockerUsage()
+		return 0
+	}
 	if len(args) == 0 || args[0] != "pull" {
 		dockerUsage()
-		os.Exit(2)
+		return 2
 	}
 
 	options, err := parseDockerPullArgs(args[1:])
 	if err != nil {
+		if errors.Is(err, errDockerHelp) {
+			dockerUsage()
+			return 0
+		}
 		fmt.Fprintf(os.Stderr, "参数错误: %v\n", err)
 		dockerUsage()
-		os.Exit(2)
+		return 2
 	}
 
-	cfg, err := loadConfig()
+	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "配置错误: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
 	if !options.limitSet && cfg.Limit > 0 {
 		options.limitKBps = cfg.Limit
@@ -60,37 +73,38 @@ func dockerCLI(args []string) {
 		options.proxy = cfg.Proxy
 	}
 	if !options.outputSet && cfg.DownloadDir != "" {
-		resolved, resolveErr := resolveConfigOutput(cfg, "", defaultDockerOutputName(options.image))
+		resolved, resolveErr := config.ResolveOutput(cfg, "", defaultDockerOutputName(options.image))
 		if resolveErr != nil {
 			fmt.Fprintf(os.Stderr, "输出路径错误: %v\n", resolveErr)
-			os.Exit(2)
+			return 2
 		}
 		options.output = resolved
 	}
 
-	InitLimiter(options.limitKBps)
-	if err := InitProxy(options.proxy); err != nil {
+	core.InitLimiter(options.limitKBps)
+	if err := core.InitProxy(options.proxy); err != nil {
 		fmt.Fprintf(os.Stderr, "参数错误: %v\n", err)
-		os.Exit(2)
+		return 2
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	fmt.Printf("[镜像] 开始拉取: %s\n", options.image)
+	core.Logf("[镜像] 开始拉取: %s\n", options.image)
 	if err := PullDockerImage(ctx, options.image, options.output); err != nil {
 		if errors.Is(err, context.Canceled) {
 			fmt.Println("镜像拉取已取消。")
-			os.Exit(130)
+			return 130
 		}
 		fmt.Fprintf(os.Stderr, "镜像拉取失败: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // dockerUsage 输出 docker pull 的帮助信息。
 func dockerUsage() {
-	fmt.Fprintln(os.Stderr, "用法: lift docker pull <image_name> [-o output.tar] [-limit KB/s] [-proxy URL]")
+	fmt.Fprintln(os.Stderr, "用法: lift docker pull <镜像名> [-o 输出.tar] [-limit KB/s] [-proxy 代理地址]")
 }
 
 // parseDockerPullArgs 解析 docker pull 参数，允许选项出现在镜像名前后。
@@ -101,8 +115,7 @@ func parseDockerPullArgs(args []string) (dockerPullOptions, error) {
 		arg := args[i]
 		switch {
 		case arg == "-h" || arg == "--help":
-			dockerUsage()
-			os.Exit(0)
+			return options, errDockerHelp
 		case arg == "-o" || arg == "--output":
 			i++
 			if i >= len(args) || args[i] == "" {
@@ -169,7 +182,7 @@ func parseDockerPullArgs(args []string) (dockerPullOptions, error) {
 // defaultDockerOutputName 根据镜像名生成默认的 tar 文件名。
 func defaultDockerOutputName(image string) string {
 	name := strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace(image)
-	name = safeBaseName(name)
+	name = core.SafeBaseName(name)
 	if name == "" {
 		name = "image"
 	}
@@ -185,7 +198,7 @@ func PullDockerImage(ctx context.Context, imageName, outputPath string) error {
 
 	progress := newDockerProgress()
 	transport := &progressTransport{
-		base:     httpTransport,
+		base:     core.HTTPTransport(),
 		progress: progress,
 	}
 
@@ -442,17 +455,15 @@ func startDockerProgress(progress *dockerProgress) func() {
 				if remaining <= 0 {
 					eta = "00:00"
 				} else if speed >= 1 {
-					eta = formatETA(float64(remaining) / speed)
+					eta = core.FormatETA(float64(remaining) / speed)
 				}
 
-				outputMu.Lock()
-				fmt.Printf("\r[层 %d/%d] %s | %5.1f%% | %.1fMB/%.1fMB | 速度: %.1fMB/s | 剩余: %s",
+				core.Logf("\r[层 %d/%d] %s | %5.1f%% | %.1fMB/%.1fMB | 速度: %.1fMB/s | 剩余: %s",
 					snapshot.index, snapshot.totalLayers, shortDigest(snapshot.digest), percent,
 					float64(snapshot.done)/(1024*1024),
 					float64(snapshot.total)/(1024*1024),
 					speed/(1024*1024),
 					eta)
-				outputMu.Unlock()
 
 				lastTime = now
 				lastDone = snapshot.totalDone
@@ -465,9 +476,7 @@ func startDockerProgress(progress *dockerProgress) func() {
 		once.Do(func() {
 			close(stop)
 			<-done
-			outputMu.Lock()
-			fmt.Println()
-			outputMu.Unlock()
+			core.Logf("\n")
 		})
 	}
 }
@@ -502,7 +511,7 @@ func (t *progressTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 
 	resp.Body = &trackedLayerReader{
-		reader:   NewRateLimitedReader(resp.Body),
+		reader:   core.NewRateLimitedReader(resp.Body),
 		closer:   resp.Body,
 		progress: t.progress,
 		digest:   digest,

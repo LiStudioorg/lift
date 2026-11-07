@@ -3,6 +3,7 @@ module github.com/LiStudioorg/lift
 go 1.27.1
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/anacrolix/torrent v1.61.0
 	github.com/google/go-containerregistry v0.22.1
 	github.com/minio/minio-go/v7 v7.4.1

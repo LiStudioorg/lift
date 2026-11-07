@@ -1,0 +1,41 @@
+# lift 示例配置。
+# 所有值均为空或零值，不会覆盖程序内置默认值。
+# 将本文件复制到 ~/.lift/config.toml 后按需填写；
+# 也可以通过环境变量 LIFT_CONFIG 指定其他配置路径。
+
+# 默认下载目录；留空表示当前目录。
+download_dir = ""
+
+# 限速，单位 KB/s；0 表示不限速。
+limit = 0
+
+# 代理地址，支持 http:// 和 socks5://；留空表示使用环境变量或直连。
+proxy = ""
+
+# 自定义请求头，例如 ["Cookie: a=b", "Referer: https://example.com/"]。
+headers = []
+
+# HTTP 镜像模板，支持 {url} 和 {url_encoded} 占位符。
+mirrors = []
+
+[s3]
+endpoint = ""
+bucket = ""
+access_key = ""
+secret_key = ""
+session_token = ""
+region = ""
+
+[sftp]
+host = ""
+port = 0
+user = ""
+password = ""
+private_key = ""
+private_key_passphrase = ""
+known_hosts = ""
+insecure = false
+
+[listen]
+host = ""
+port = 0

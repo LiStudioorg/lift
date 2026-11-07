@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"encoding/json"
@@ -6,19 +6,19 @@ import (
 	"os"
 )
 
-// Chunk 表示文件的一个分片。
+// Chunk 是文件中可断点续传的区间。
 type Chunk struct {
-	Start      int64 `json:"start"`      // 分片起始偏移量（包含）
-	End        int64 `json:"end"`        // 分片结束偏移量（不包含）
-	Downloaded int64 `json:"downloaded"` // 已下载字节数
+	Start      int64 `json:"start"`
+	End        int64 `json:"end"`
+	Downloaded int64 `json:"downloaded"`
 }
 
-// DownloadState 保存断点续传所需的下载状态。
+// DownloadState 保存断点续传所需的元数据。
 type DownloadState struct {
-	URL    string  `json:"url"`    // 下载地址
-	ETag   string  `json:"etag"`   // 远端文件 ETag
-	Size   int64   `json:"size"`   // 文件总大小
-	Chunks []Chunk `json:"chunks"` // 分片列表
+	URL    string  `json:"url"`
+	ETag   string  `json:"etag"`
+	Size   int64   `json:"size"`
+	Chunks []Chunk `json:"chunks"`
 }
 
 // StatePath 返回输出文件对应的状态文件路径。
@@ -26,7 +26,7 @@ func StatePath(outputPath string) string {
 	return outputPath + ".lift"
 }
 
-// SaveState 将状态原子地写入磁盘：先写临时文件并调用 Sync，再重命名替换。
+// SaveState 通过写入-同步-重命名的方式原子保存状态。
 func SaveState(path string, state *DownloadState) error {
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {

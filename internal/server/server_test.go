@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -10,10 +10,22 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/LiStudioorg/lift/internal/core"
+	"github.com/LiStudioorg/lift/internal/protocol"
 )
 
+// servePayload 提供支持 HEAD 的测试文件服务。
+func servePayload(w http.ResponseWriter, r *http.Request, payload []byte) {
+	w.Header().Set("ETag", `"test-etag"`)
+	w.Header().Set("Content-Length", "29")
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(payload)
+	}
+}
+
 func TestListenAPIQueuesAndDownloads(t *testing.T) {
-	InitLimiter(0)
+	core.InitLimiter(0)
 
 	payload := []byte("listen api payload 0123456789")
 	contentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -24,7 +36,7 @@ func TestListenAPIQueuesAndDownloads(t *testing.T) {
 	outputDir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	server := newListenServer(ctx, listenOptions{OutputDir: outputDir}, sourceOptions{})
+	server := newListenServer(ctx, Options{OutputDir: outputDir}, protocol.Options{})
 	defer server.Close()
 
 	apiServer := httptest.NewServer(server.handler())
@@ -88,7 +100,7 @@ func TestListenAPIQueuesAndDownloads(t *testing.T) {
 func TestListenAPIRejectsInvalidURL(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	server := newListenServer(ctx, listenOptions{OutputDir: t.TempDir()}, sourceOptions{})
+	server := newListenServer(ctx, Options{OutputDir: t.TempDir()}, protocol.Options{})
 	defer server.Close()
 
 	apiServer := httptest.NewServer(server.handler())

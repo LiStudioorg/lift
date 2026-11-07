@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"context"
@@ -27,14 +27,10 @@ const (
 var (
 	// retryDelays 是每次重试前的等待时间，依次为 1s、2s、4s。
 	retryDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
-	// outputMu 防止多个下载任务的进度和日志互相穿插。
-	outputMu sync.Mutex
 )
 
 // urlSource 是可选接口，用于获取下载源地址并写入状态文件。
-type urlSource interface {
-	URL() string
-}
+type urlSource = URLSource
 
 // chunkJob 表示一个待下载的分片任务。
 type chunkJob struct {
@@ -43,12 +39,17 @@ type chunkJob struct {
 	end   int64 // 本次下载的结束偏移量（不包含）
 }
 
-// Download 下载 src 指向的对象到 outputPath，并支持断点续传。
+// Download 将 src 下载到 outputPath，并支持断点续传。
 func Download(ctx context.Context, src Source, outputPath string) error {
 	return download(ctx, src, outputPath, "", false)
 }
 
-// download 是 Download 的内部实现。batch 为 true 时使用带文件名的多行进度输出。
+// DownloadTo 使用显式标签和进度模式下载 src，供批量下载和 HTTP API 服务使用。
+func DownloadTo(ctx context.Context, src Source, outputPath, label string, batch bool) error {
+	return download(ctx, src, outputPath, label, batch)
+}
+
+// download 是内部实现。batch 开启包含标签的多行进度输出。
 func download(ctx context.Context, src Source, outputPath, label string, batch bool) error {
 	if label == "" {
 		label = filepath.Base(outputPath)
@@ -268,7 +269,7 @@ func download(ctx context.Context, src Source, outputPath, label string, batch b
 			if remaining <= 0 {
 				eta = "00:00"
 			} else if speed >= 1 {
-				eta = formatETA(float64(remaining) / speed)
+				eta = FormatETA(float64(remaining) / speed)
 			}
 
 			outputMu.Lock()
@@ -295,8 +296,8 @@ func download(ctx context.Context, src Source, outputPath, label string, batch b
 	}
 }
 
-// formatETA 将剩余秒数格式化为 MM:SS 或 HH:MM:SS。
-func formatETA(seconds float64) string {
+// FormatETA 将剩余秒数格式化为 MM:SS 或 HH:MM:SS。
+func FormatETA(seconds float64) string {
 	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 {
 		return "--:--"
 	}

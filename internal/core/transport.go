@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"context"
@@ -24,8 +24,22 @@ var httpClient = &http.Client{
 
 var globalLimiter *rate.Limiter
 
-// InitProxy 使用显式代理覆盖默认的环境变量代理配置。
-// 支持 http:// 和 socks5:// 两种代理协议。
+// HTTPTransport 返回所有协议共享的传输层。
+func HTTPTransport() *http.Transport {
+	return httpTransport
+}
+
+// HTTPClient 返回共享的 HTTP 客户端。
+func HTTPClient() *http.Client {
+	return httpClient
+}
+
+// Limiter 返回全局限速器；不限速时返回 nil。
+func Limiter() *rate.Limiter {
+	return globalLimiter
+}
+
+// InitProxy 使用显式代理覆盖默认的环境变量代理，支持 http:// 和 socks5://。
 func InitProxy(proxyRawURL string) error {
 	if proxyRawURL == "" {
 		return nil
@@ -48,7 +62,7 @@ func InitProxy(proxyRawURL string) error {
 	return nil
 }
 
-// InitLimiter 初始化全局限速器。限速值小于等于 0 时表示不限速。
+// InitLimiter 初始化全局限速器，值小于等于 0 时关闭限速。
 func InitLimiter(limitKBps int) {
 	globalLimiter = nil
 	if limitKBps <= 0 {
@@ -63,12 +77,12 @@ func InitLimiter(limitKBps int) {
 	globalLimiter = rate.NewLimiter(limit, burst)
 }
 
-// RateLimitedReader 包装 io.Reader，并通过全局限速器控制读取速度。
+// RateLimitedReader 包装 io.Reader 并应用全局限速。
 type RateLimitedReader struct {
 	reader io.Reader
 }
 
-// NewRateLimitedReader 创建一个带限速功能的 Reader。
+// NewRateLimitedReader 创建限速读取器。
 func NewRateLimitedReader(r io.Reader) *RateLimitedReader {
 	return &RateLimitedReader{reader: r}
 }

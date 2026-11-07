@@ -1,8 +1,7 @@
-package main
+package sftp
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -17,10 +16,12 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+
+	"github.com/LiStudioorg/lift/internal/core"
 )
 
-// sftpOptions 是连接 SFTP 服务器所需的参数。
-type sftpOptions struct {
+// Options 是连接 SFTP 服务器所需的参数。
+type Options struct {
 	Host           string
 	Port           int
 	User           string
@@ -31,9 +32,9 @@ type sftpOptions struct {
 	Insecure       bool
 }
 
-// SFTPSource 通过 SFTP 协议读取远端文件。
-type SFTPSource struct {
-	options    sftpOptions
+// Source 通过 SFTP 协议读取远端文件。
+type Source struct {
+	options    Options
 	remotePath string
 	sourceURL  string
 
@@ -42,8 +43,8 @@ type SFTPSource struct {
 	conn   *ssh.Client
 }
 
-// newSFTPSource 创建 SFTP 数据源。
-func newSFTPSource(options sftpOptions, remotePath string) (*SFTPSource, error) {
+// New 创建 SFTP 数据源。
+func New(options Options, remotePath string) (*Source, error) {
 	if strings.TrimSpace(options.Host) == "" {
 		return nil, fmt.Errorf("SFTP 主机不能为空")
 	}
@@ -57,15 +58,15 @@ func newSFTPSource(options sftpOptions, remotePath string) (*SFTPSource, error) 
 		return nil, fmt.Errorf("SFTP 需要提供密码或私钥")
 	}
 
-	return &SFTPSource{
+	return &Source{
 		options:    options,
 		remotePath: remotePath,
 		sourceURL:  sanitizedSFTPURL(options, remotePath),
 	}, nil
 }
 
-// newSFTPSourceFromURL 从 sftp://user:pass@host:port/path 创建数据源。
-func newSFTPSourceFromURL(u *url.URL, options sftpOptions) (*SFTPSource, error) {
+// NewFromURL 从 sftp://user:pass@host:port/path 创建数据源。
+func NewFromURL(u *url.URL, options Options) (*Source, error) {
 	if u.Host == "" {
 		return nil, fmt.Errorf("SFTP URL 缺少主机名: %s", u.String())
 	}
@@ -78,11 +79,11 @@ func newSFTPSourceFromURL(u *url.URL, options sftpOptions) (*SFTPSource, error) 
 			options.Password = password
 		}
 	}
-	return newSFTPSource(options, u.Path)
+	return New(options, u.Path)
 }
 
 // sanitizedSFTPURL 生成不包含密码的展示地址，避免密码写入状态文件。
-func sanitizedSFTPURL(options sftpOptions, remotePath string) string {
+func sanitizedSFTPURL(options Options, remotePath string) string {
 	u := url.URL{
 		Scheme: "sftp",
 		Host:   options.Host,
@@ -95,12 +96,12 @@ func sanitizedSFTPURL(options sftpOptions, remotePath string) string {
 }
 
 // URL 返回下载源地址。
-func (s *SFTPSource) URL() string {
+func (s *Source) URL() string {
 	return s.sourceURL
 }
 
 // Stat 使用 SFTP Stat 获取文件大小，并用 ModTime 作为变更标识。
-func (s *SFTPSource) Stat(ctx context.Context) (*ObjectInfo, error) {
+func (s *Source) Stat(ctx context.Context) (*core.ObjectInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -117,14 +118,14 @@ func (s *SFTPSource) Stat(ctx context.Context) (*ObjectInfo, error) {
 		return nil, fmt.Errorf("SFTP 远端路径是目录: %s", s.remotePath)
 	}
 
-	return &ObjectInfo{
+	return &core.ObjectInfo{
 		Size: info.Size(),
 		ETag: info.ModTime().UTC().Format(time.RFC3339Nano),
 	}, nil
 }
 
 // OpenStream 打开远端文件并定位到指定偏移量。
-func (s *SFTPSource) OpenStream(ctx context.Context, offset int64) (io.ReadCloser, error) {
+func (s *Source) OpenStream(ctx context.Context, offset int64) (io.ReadCloser, error) {
 	if offset < 0 {
 		return nil, fmt.Errorf("SFTP Open %s: 无效偏移量 %d", s.remotePath, offset)
 	}
@@ -162,7 +163,7 @@ func (s *SFTPSource) OpenStream(ctx context.Context, offset int64) (io.ReadClose
 }
 
 // Close 关闭 SFTP 会话和底层 SSH 连接。
-func (s *SFTPSource) Close() error {
+func (s *Source) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -181,7 +182,7 @@ func (s *SFTPSource) Close() error {
 }
 
 // connect 延迟建立 SSH/SFTP 连接，多个下载协程共享同一个客户端。
-func (s *SFTPSource) connect(ctx context.Context) (*sftp.Client, error) {
+func (s *Source) connect(ctx context.Context) (*sftp.Client, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -245,7 +246,7 @@ func (s *SFTPSource) connect(ctx context.Context) (*sftp.Client, error) {
 }
 
 // invalidate 在连接失效时关闭并清除当前客户端。
-func (s *SFTPSource) invalidate(stale *sftp.Client) {
+func (s *Source) invalidate(stale *sftp.Client) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -260,7 +261,7 @@ func (s *SFTPSource) invalidate(stale *sftp.Client) {
 }
 
 // address 将主机和端口组合成 net.Dial 可用的地址。
-func (s *SFTPSource) address() (string, error) {
+func (s *Source) address() (string, error) {
 	host := strings.TrimSpace(s.options.Host)
 	if host == "" {
 		return "", fmt.Errorf("SFTP 主机不能为空")
@@ -277,7 +278,7 @@ func (s *SFTPSource) address() (string, error) {
 	return net.JoinHostPort(host, strconv.Itoa(s.port())), nil
 }
 
-func (s *SFTPSource) port() int {
+func (s *Source) port() int {
 	if s.options.Port > 0 {
 		return s.options.Port
 	}
@@ -285,7 +286,7 @@ func (s *SFTPSource) port() int {
 }
 
 // authMethods 根据密码或私钥构建 SSH 认证方式。
-func (s *SFTPSource) authMethods() ([]ssh.AuthMethod, error) {
+func (s *Source) authMethods() ([]ssh.AuthMethod, error) {
 	var methods []ssh.AuthMethod
 
 	if s.options.Password != "" {
@@ -317,7 +318,7 @@ func (s *SFTPSource) authMethods() ([]ssh.AuthMethod, error) {
 }
 
 // hostKeyCallback 优先使用 known_hosts 校验服务器指纹。
-func (s *SFTPSource) hostKeyCallback() (ssh.HostKeyCallback, error) {
+func (s *Source) hostKeyCallback() (ssh.HostKeyCallback, error) {
 	if s.options.Insecure {
 		return ssh.InsecureIgnoreHostKey(), nil
 	}
@@ -385,88 +386,4 @@ func (r *contextReadCloser) Close() error {
 		err = r.ReadCloser.Close()
 	})
 	return err
-}
-
-// sftpCLI 处理 sftp pull 子命令。
-func sftpCLI(args []string) {
-	if len(args) == 0 || args[0] != "pull" {
-		sftpUsage()
-		os.Exit(2)
-	}
-
-	fs := flag.NewFlagSet("sftp pull", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	host := fs.String("host", "", "SFTP 主机（可含端口）")
-	port := fs.Int("port", 0, "SFTP 端口（主机未包含端口时使用，默认 22）")
-	user := fs.String("user", "", "SFTP 用户名")
-	password := fs.String("pass", "", "SFTP 密码")
-	keyPath := fs.String("key", "", "SFTP 私钥路径")
-	keyPassphrase := fs.String("key-pass", "", "SFTP 私钥密码")
-	knownHosts := fs.String("known-hosts", "", "known_hosts 路径")
-	insecure := fs.Bool("insecure", false, "跳过主机密钥校验（不推荐）")
-	output := fs.String("o", "", "输出文件名")
-	limit := fs.Int("limit", 0, "限速（KB/s，0 表示不限速）")
-
-	remotePath, err := parsePullArgs(fs, args[1:], "远端路径")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "参数错误: %v\n", err)
-		sftpUsage()
-		os.Exit(2)
-	}
-
-	cfg, err := loadConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "配置错误: %v\n", err)
-		os.Exit(2)
-	}
-	visited := visitedFlags(fs)
-	applyStringDefault(host, visited, "host", cfg.SFTP.Host)
-	applyIntDefault(port, visited, "port", cfg.SFTP.Port)
-	applyStringDefault(user, visited, "user", cfg.SFTP.User)
-	applyStringDefault(password, visited, "pass", cfg.SFTP.Password)
-	applyStringDefault(keyPath, visited, "key", cfg.SFTP.KeyPath)
-	applyStringDefault(keyPassphrase, visited, "key-pass", cfg.SFTP.KeyPassphrase)
-	applyStringDefault(knownHosts, visited, "known-hosts", cfg.SFTP.KnownHosts)
-	applyBoolDefault(insecure, visited, "insecure", cfg.SFTP.Insecure)
-	applyIntDefault(limit, visited, "limit", cfg.Limit)
-
-	if *host == "" {
-		fmt.Fprintln(os.Stderr, "参数错误: 缺少 --host")
-		sftpUsage()
-		os.Exit(2)
-	}
-	if *output == "" {
-		*output = defaultSourceOutputName(remotePath)
-	}
-	if !visited["o"] && cfg.DownloadDir != "" {
-		resolved, err := resolveConfigOutput(cfg, "", defaultSourceOutputName(remotePath))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "输出路径错误: %v\n", err)
-			os.Exit(2)
-		}
-		*output = resolved
-	}
-
-	InitLimiter(*limit)
-
-	src, err := newSFTPSource(sftpOptions{
-		Host:           *host,
-		Port:           *port,
-		User:           *user,
-		Password:       *password,
-		KeyPath:        *keyPath,
-		KeyPassphrase:  *keyPassphrase,
-		KnownHostsPath: *knownHosts,
-		Insecure:       *insecure,
-	}, remotePath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "参数错误: %v\n", err)
-		os.Exit(2)
-	}
-
-	runSourceCLI(src, *output)
-}
-
-func sftpUsage() {
-	fmt.Fprintln(os.Stderr, "用法: lift sftp pull <remote_path> --host <host[:port]> --user <user> (--pass <password> | --key <private_key>) [-o output] [-limit KB/s]")
 }
