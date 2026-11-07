@@ -24,6 +24,9 @@ func main() {
 		case "sftp":
 			sftpCLI(os.Args[2:])
 			return
+		case "magnet":
+			magnetCLI(os.Args[2:])
+			return
 		}
 	}
 
@@ -52,7 +55,9 @@ func main() {
 		fmt.Fprintf(out, "      %s docker pull <image> -o <output.tar>\n", os.Args[0])
 		fmt.Fprintf(out, "      %s s3 pull <key> --bucket <bucket> --endpoint <url> --ak <key> --sk <secret> -o <output>\n", os.Args[0])
 		fmt.Fprintf(out, "      %s sftp pull <path> --host <host[:port]> --user <user> (--pass <password> | --key <private_key>) -o <output>\n", os.Args[0])
+		fmt.Fprintf(out, "      %s magnet <magnet_uri> -o <output_dir>\n", os.Args[0])
 		fmt.Fprintln(out, "支持协议: http(s)://、s3://bucket/key、sftp://user:pass@host:port/path")
+		fmt.Fprintln(out, "BT 下载: lift magnet <magnet_uri> -o <输出目录>")
 		flag.PrintDefaults()
 	}
 
