@@ -165,6 +165,22 @@ func s3CLI(args []string) {
 		s3Usage()
 		os.Exit(2)
 	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "配置错误: %v\n", err)
+		os.Exit(2)
+	}
+	visited := visitedFlags(fs)
+	applyStringDefault(bucket, visited, "bucket", cfg.S3.Bucket)
+	applyStringDefault(endpoint, visited, "endpoint", cfg.S3.Endpoint)
+	applyStringDefault(accessKey, visited, "ak", cfg.S3.AccessKey)
+	applyStringDefault(secretKey, visited, "sk", cfg.S3.SecretKey)
+	applyStringDefault(sessionToken, visited, "token", cfg.S3.SessionToken)
+	applyStringDefault(region, visited, "region", cfg.S3.Region)
+	applyIntDefault(limit, visited, "limit", cfg.Limit)
+	applyStringDefault(proxy, visited, "proxy", cfg.Proxy)
+
 	if *bucket == "" {
 		fmt.Fprintln(os.Stderr, "参数错误: 缺少 --bucket")
 		s3Usage()
@@ -172,6 +188,14 @@ func s3CLI(args []string) {
 	}
 	if *output == "" {
 		*output = defaultSourceOutputName(key)
+	}
+	if !visited["o"] && cfg.DownloadDir != "" {
+		resolved, err := resolveConfigOutput(cfg, "", defaultSourceOutputName(key))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "输出路径错误: %v\n", err)
+			os.Exit(2)
+		}
+		*output = resolved
 	}
 
 	InitLimiter(*limit)

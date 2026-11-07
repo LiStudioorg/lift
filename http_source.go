@@ -9,17 +9,27 @@ import (
 
 // HTTPSource 通过 HTTP 读取远端对象。
 type HTTPSource struct {
-	url string
+	url     string
+	headers http.Header
 }
 
-// NewHTTPSource 创建 HTTP 下载源。
-func NewHTTPSource(url string) *HTTPSource {
-	return &HTTPSource{url: url}
+// NewHTTPSource 创建 HTTP 下载源，并把自定义请求头附加到 HEAD/GET 请求。
+func NewHTTPSource(url string, headers http.Header) *HTTPSource {
+	return &HTTPSource{url: url, headers: headers.Clone()}
 }
 
 // URL 返回下载源地址。
 func (s *HTTPSource) URL() string {
 	return s.url
+}
+
+// applyHeaders 将用户自定义请求头写入请求。
+func (s *HTTPSource) applyHeaders(req *http.Request) {
+	for name, values := range s.headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
 }
 
 // Stat 使用 HEAD 请求获取文件大小和 ETag。
@@ -28,6 +38,7 @@ func (s *HTTPSource) Stat(ctx context.Context) (*ObjectInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.applyHeaders(req)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -58,6 +69,7 @@ func (s *HTTPSource) OpenStream(ctx context.Context, offset int64) (io.ReadClose
 	if err != nil {
 		return nil, err
 	}
+	s.applyHeaders(req)
 	if offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}

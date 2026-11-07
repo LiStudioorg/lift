@@ -45,6 +45,17 @@ func magnetCLI(args []string) {
 		os.Exit(2)
 	}
 
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "配置错误: %v\n", err)
+		os.Exit(2)
+	}
+	visited := visitedFlags(fs)
+	applyIntDefault(limit, visited, "limit", cfg.Limit)
+	if !visited["o"] && cfg.DownloadDir != "" {
+		*output = cfg.DownloadDir
+	}
+
 	InitLimiter(*limit)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

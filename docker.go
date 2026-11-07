@@ -29,6 +29,9 @@ type dockerPullOptions struct {
 	output    string
 	limitKBps int
 	proxy     string
+	outputSet bool
+	limitSet  bool
+	proxySet  bool
 }
 
 // dockerCLI 处理 docker 子命令。
@@ -43,6 +46,26 @@ func dockerCLI(args []string) {
 		fmt.Fprintf(os.Stderr, "参数错误: %v\n", err)
 		dockerUsage()
 		os.Exit(2)
+	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "配置错误: %v\n", err)
+		os.Exit(2)
+	}
+	if !options.limitSet && cfg.Limit > 0 {
+		options.limitKBps = cfg.Limit
+	}
+	if !options.proxySet && cfg.Proxy != "" {
+		options.proxy = cfg.Proxy
+	}
+	if !options.outputSet && cfg.DownloadDir != "" {
+		resolved, resolveErr := resolveConfigOutput(cfg, "", defaultDockerOutputName(options.image))
+		if resolveErr != nil {
+			fmt.Fprintf(os.Stderr, "输出路径错误: %v\n", resolveErr)
+			os.Exit(2)
+		}
+		options.output = resolved
 	}
 
 	InitLimiter(options.limitKBps)
@@ -86,10 +109,13 @@ func parseDockerPullArgs(args []string) (dockerPullOptions, error) {
 				return options, fmt.Errorf("-o 缺少输出文件名")
 			}
 			options.output = args[i]
+			options.outputSet = true
 		case strings.HasPrefix(arg, "-o="):
 			options.output = strings.TrimPrefix(arg, "-o=")
+			options.outputSet = true
 		case strings.HasPrefix(arg, "--output="):
 			options.output = strings.TrimPrefix(arg, "--output=")
+			options.outputSet = true
 		case arg == "-limit" || arg == "--limit":
 			i++
 			if i >= len(args) {
@@ -100,22 +126,27 @@ func parseDockerPullArgs(args []string) (dockerPullOptions, error) {
 				return options, fmt.Errorf("-limit 数值无效: %w", err)
 			}
 			options.limitKBps = value
+			options.limitSet = true
 		case strings.HasPrefix(arg, "-limit="):
 			value, err := strconv.Atoi(strings.TrimPrefix(arg, "-limit="))
 			if err != nil {
 				return options, fmt.Errorf("-limit 数值无效: %w", err)
 			}
 			options.limitKBps = value
+			options.limitSet = true
 		case arg == "-proxy" || arg == "--proxy":
 			i++
 			if i >= len(args) || args[i] == "" {
 				return options, fmt.Errorf("-proxy 缺少代理地址")
 			}
 			options.proxy = args[i]
+			options.proxySet = true
 		case strings.HasPrefix(arg, "-proxy="):
 			options.proxy = strings.TrimPrefix(arg, "-proxy=")
+			options.proxySet = true
 		case strings.HasPrefix(arg, "--proxy="):
 			options.proxy = strings.TrimPrefix(arg, "--proxy=")
+			options.proxySet = true
 		case strings.HasPrefix(arg, "-"):
 			return options, fmt.Errorf("未知参数: %s", arg)
 		default:

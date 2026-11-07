@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 )
@@ -27,6 +28,9 @@ func main() {
 		case "magnet":
 			magnetCLI(os.Args[2:])
 			return
+		case "listen":
+			listenCLI(os.Args[2:])
+			return
 		}
 	}
 
@@ -35,6 +39,9 @@ func main() {
 	listPath := flag.String("f", "", "包含多个 URL 的列表文件（每行一个，忽略空行和 # 注释）")
 	expectedSHA256 := flag.String("sha256", "", "下载完成后校验文件的 SHA256（仅支持单个下载任务）")
 	proxy := flag.String("proxy", "", "代理地址（支持 http:// 和 socks5://）")
+	mirror := flag.String("mirror", "", "镜像模板，逗号分隔，例如 https://ghproxy.com/{url}")
+	var cliHeaders headerList
+	flag.Var(&cliHeaders, "H", "自定义请求头，可多次指定，例如 -H \"Cookie: xxx\" -H \"Referer: yyy\"")
 
 	s3Endpoint := flag.String("s3-endpoint", "", "S3 Endpoint（含协议，如 https://s3.amazonaws.com；默认 AWS）")
 	s3AccessKey := flag.String("s3-ak", "", "S3 Access Key")
@@ -56,14 +63,52 @@ func main() {
 		fmt.Fprintf(out, "      %s s3 pull <key> --bucket <bucket> --endpoint <url> --ak <key> --sk <secret> -o <output>\n", os.Args[0])
 		fmt.Fprintf(out, "      %s sftp pull <path> --host <host[:port]> --user <user> (--pass <password> | --key <private_key>) -o <output>\n", os.Args[0])
 		fmt.Fprintf(out, "      %s magnet <magnet_uri> -o <output_dir>\n", os.Args[0])
+		fmt.Fprintf(out, "      %s listen [-host 127.0.0.1] [-port 16800] [-o 下载目录]\n", os.Args[0])
 		fmt.Fprintln(out, "支持协议: http(s)://、s3://bucket/key、sftp://user:pass@host:port/path")
 		fmt.Fprintln(out, "BT 下载: lift magnet <magnet_uri> -o <输出目录>")
+		fmt.Fprintln(out, "配置文件: ~/.lift/config.json（可用 LIFT_CONFIG 覆盖路径）")
 		flag.PrintDefaults()
 	}
 
 	// 允许选项出现在 URL 前后，兼容子命令风格的参数顺序。
 	if err := flag.CommandLine.Parse(reorderArgs(os.Args[1:])); err != nil {
 		os.Exit(2)
+	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "配置错误: %v\n", err)
+		os.Exit(2)
+	}
+	visited := visitedFlags(flag.CommandLine)
+
+	// 优先级：命令行参数 > 配置文件 > 默认值。
+	applyIntDefault(limit, visited, "limit", cfg.Limit)
+	applyStringDefault(proxy, visited, "proxy", cfg.Proxy)
+	applyStringDefault(s3Endpoint, visited, "s3-endpoint", cfg.S3.Endpoint)
+	applyStringDefault(s3AccessKey, visited, "s3-ak", cfg.S3.AccessKey)
+	applyStringDefault(s3SecretKey, visited, "s3-sk", cfg.S3.SecretKey)
+	applyStringDefault(s3SessionToken, visited, "s3-token", cfg.S3.SessionToken)
+	applyStringDefault(s3Region, visited, "s3-region", cfg.S3.Region)
+	applyStringDefault(sftpUser, visited, "sftp-user", cfg.SFTP.User)
+	applyStringDefault(sftpPassword, visited, "sftp-pass", cfg.SFTP.Password)
+	applyStringDefault(sftpKey, visited, "sftp-key", cfg.SFTP.KeyPath)
+	applyStringDefault(sftpKeyPassphrase, visited, "sftp-key-pass", cfg.SFTP.KeyPassphrase)
+	applyStringDefault(sftpKnownHosts, visited, "sftp-known-hosts", cfg.SFTP.KnownHosts)
+	applyBoolDefault(sftpInsecure, visited, "sftp-insecure", cfg.SFTP.Insecure)
+
+	headerLines := []string(cliHeaders)
+	if !visited["H"] && len(cfg.Headers) > 0 {
+		headerLines = cfg.Headers
+	}
+	headers, err := headersFromLines(headerLines)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "参数错误: %v\n", err)
+		os.Exit(2)
+	}
+	mirrors := parseMirrorFlag(*mirror)
+	if !visited["mirror"] && len(cfg.Mirrors) > 0 {
+		mirrors = cfg.Mirrors
 	}
 
 	appSourceOptions = sourceOptions{
@@ -82,6 +127,8 @@ func main() {
 			KnownHostsPath: *sftpKnownHosts,
 			Insecure:       *sftpInsecure,
 		},
+		headers: headers,
+		mirrors: mirrors,
 	}
 
 	urls, err := collectURLs(flag.Args(), *listPath)
@@ -104,6 +151,18 @@ func main() {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "参数错误: %v\n", err)
 			os.Exit(2)
+		}
+	}
+
+	if !visited["o"] && cfg.DownloadDir != "" {
+		if len(urls) == 1 {
+			if err := os.MkdirAll(cfg.DownloadDir, 0o755); err != nil {
+				fmt.Fprintf(os.Stderr, "创建配置下载目录失败: %v\n", err)
+				os.Exit(2)
+			}
+			*output = filepath.Join(cfg.DownloadDir, defaultOutputName(urls[0]))
+		} else {
+			*output = cfg.DownloadDir
 		}
 	}
 

@@ -413,6 +413,23 @@ func sftpCLI(args []string) {
 		sftpUsage()
 		os.Exit(2)
 	}
+
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "配置错误: %v\n", err)
+		os.Exit(2)
+	}
+	visited := visitedFlags(fs)
+	applyStringDefault(host, visited, "host", cfg.SFTP.Host)
+	applyIntDefault(port, visited, "port", cfg.SFTP.Port)
+	applyStringDefault(user, visited, "user", cfg.SFTP.User)
+	applyStringDefault(password, visited, "pass", cfg.SFTP.Password)
+	applyStringDefault(keyPath, visited, "key", cfg.SFTP.KeyPath)
+	applyStringDefault(keyPassphrase, visited, "key-pass", cfg.SFTP.KeyPassphrase)
+	applyStringDefault(knownHosts, visited, "known-hosts", cfg.SFTP.KnownHosts)
+	applyBoolDefault(insecure, visited, "insecure", cfg.SFTP.Insecure)
+	applyIntDefault(limit, visited, "limit", cfg.Limit)
+
 	if *host == "" {
 		fmt.Fprintln(os.Stderr, "参数错误: 缺少 --host")
 		sftpUsage()
@@ -420,6 +437,14 @@ func sftpCLI(args []string) {
 	}
 	if *output == "" {
 		*output = defaultSourceOutputName(remotePath)
+	}
+	if !visited["o"] && cfg.DownloadDir != "" {
+		resolved, err := resolveConfigOutput(cfg, "", defaultSourceOutputName(remotePath))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "输出路径错误: %v\n", err)
+			os.Exit(2)
+		}
+		*output = resolved
 	}
 
 	InitLimiter(*limit)
