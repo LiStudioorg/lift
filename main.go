@@ -19,6 +19,7 @@ import (
 	sftpproto "github.com/LiStudioorg/lift/internal/protocol/sftp"
 	"github.com/LiStudioorg/lift/internal/server"
 	"github.com/LiStudioorg/lift/internal/torrent"
+	"github.com/LiStudioorg/lift/internal/upgrade"
 	"github.com/LiStudioorg/lift/internal/version"
 )
 
@@ -39,6 +40,8 @@ func run(args []string) int {
 			return torrent.CLI(args[1:])
 		case "listen":
 			return server.CLI(args[1:])
+		case "upgrade":
+			return upgrade.CLI(args[1:])
 		}
 	}
 
@@ -233,6 +236,7 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintf(out, "      %s sftp pull <path> --host <host[:port]> --user <user> (--pass <password> | --key <private_key>) -o <output>\n", os.Args[0])
 	fmt.Fprintf(out, "      %s magnet <magnet_uri> -o <output_dir>\n", os.Args[0])
 	fmt.Fprintf(out, "      %s listen [-host 127.0.0.1] [-port 16800] [-o 下载目录]\n", os.Args[0])
+	fmt.Fprintf(out, "      %s upgrade [-f|--force]\n", os.Args[0])
 	fmt.Fprintln(out, "支持协议: http(s)://、s3://bucket/key、sftp://user:pass@host:port/path")
 	fmt.Fprintln(out, "BT 下载: lift magnet <magnet_uri> -o <输出目录>")
 	fmt.Fprintln(out, "配置文件: ~/.lift/config.toml（可用 LIFT_CONFIG 覆盖路径）")

@@ -73,6 +73,54 @@
 
 ## 安装
 
+### 一键安装脚本
+
+仓库提供四个独立安装脚本。脚本会查询 GitHub 最新 Release，根据当前系统和架构下载对应产物；已安装版本与最新版本一致时跳过，使用 `-u` 或 `--upgrade` 可强制重新安装并覆盖旧文件。
+
+#### Linux / macOS
+
+全局安装到 `/usr/local/bin/lift`，需要 root 权限：
+
+```bash
+sudo ./scripts/install-global.sh
+sudo ./scripts/install-global.sh -u
+```
+
+用户安装到 `~/.local/bin/lift`：
+
+```bash
+./scripts/install-user.sh
+./scripts/install-user.sh -u
+```
+
+如果 `~/.local/bin` 不在 `PATH` 中，`install-user.sh` 会输出添加方式：
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+也可以从 GitHub 直接执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LiStudioorg/lift/main/scripts/install-global.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/LiStudioorg/lift/main/scripts/install-user.sh | bash
+```
+
+强制重新安装时追加参数：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LiStudioorg/lift/main/scripts/install-global.sh | sudo bash -s -- -u
+curl -fsSL https://raw.githubusercontent.com/LiStudioorg/lift/main/scripts/install-user.sh | bash -s -- -u
+```
+
+#### Windows
+
+以管理员身份运行 `scripts\install-global.bat`，安装到 `C:\ProgramData\lift`，并通过 `setx /M` 写入系统 PATH。
+
+普通用户运行 `scripts\install-user.bat`，安装到 `%LOCALAPPDATA%\lift`，并通过 `setx` 写入当前用户 PATH。
+
+两个脚本都支持 `-u` 或 `--upgrade` 强制重新安装。安装完成后需要打开新的终端，使 PATH 变更生效。
+
 ### 使用发布产物
 
 从 GitHub Releases 下载对应平台的压缩包，解压后直接运行：
@@ -179,6 +227,7 @@ lift s3 pull <key> --bucket <bucket> [选项]
 lift sftp pull <path> --host <host[:port]> --user <user> [选项]
 lift magnet <magnet_uri> [-o output_dir]
 lift listen [-host 127.0.0.1] [-port 16800] [选项]
+lift upgrade [-f|--force]
 ```
 
 ### 全局选项
@@ -572,6 +621,17 @@ go build -trimpath \
 lift v0.1.0 (commit 1a2b3c4, built 2026-11-07T12:00:00Z)
 ```
 
+### 自更新
+
+`lift upgrade` 会查询 GitHub 最新 Release，比较当前版本；有新版本时下载当前平台的发布包并覆盖当前可执行文件。`-f` 或 `--force` 可强制重新安装。
+
+```bash
+./lift upgrade
+./lift upgrade -f
+```
+
+Windows 下如果可执行文件正在运行，会先将旧文件重命名为 `.old`，写入新文件后再清理；如果旧文件仍被占用，会在下次升级时继续清理。
+
 ### 发布流程
 
 仓库包含 `.goreleaser.yaml` 与 `.github/workflows/release.yml`：
@@ -604,8 +664,13 @@ internal/protocol/sftp   SFTP 源
 internal/protocol/docker Docker 镜像导出
 internal/server          监听 API 服务与任务队列
 internal/torrent         BitTorrent 磁力链引擎
+internal/upgrade         自更新命令
 internal/version         构建期版本变量
 scripts/build.sh         全目标构建与失败汇总脚本
+scripts/install-global.sh  Linux/macOS 全局安装
+scripts/install-user.sh    Linux/macOS 用户安装
+scripts/install-global.bat Windows 全局安装
+scripts/install-user.bat   Windows 用户安装
 configs/                 配置示例
 ```
 
